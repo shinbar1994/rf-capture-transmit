@@ -1,0 +1,13 @@
+# RTL-SDR capture
+pyrtlsdr>=0.5.0
+pyrtlsdrlib>=0.0.7   # bundles librtlsdr.dll on Windows (no manual DLL hunting)
+numpy>=1.24
+matplotlib>=3.7      # interactive signal viewer (envelope + bit slicing)
+
+# YARD Stick One transmit (RfCat).
+# On Windows the maintained fork usually installs cleanest:
+#   pip install rfcat
+# If that fails, install from source: https://github.com/atlas0fd00m/rfcat
+rfcat>=1.9.6
+
+# tkinter ships with standard CPython on Windows (no pip install needed).

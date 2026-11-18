@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Captured RF data — your own signals/codes, keep them OUT of the repo
+capture_*.npy
+capture_*.npz
+capture_*.json
+*.complex
+*.cu8
+*.iq
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
