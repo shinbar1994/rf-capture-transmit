@@ -114,9 +114,40 @@ def reset_dongle():
                 pass
         _dongle = None
     if RFLIB_AVAILABLE:
-        _dongle = RfCat()
-        return "YARD Stick One reset (USB reconnected)."
+        try:
+            _dongle = RfCat()
+            return "YARD Stick One reset (USB reconnected)."
+        except Exception as e:
+            _dongle = None
+            return f"YARD Stick One not found: {e}"
     return "rflib not available -- nothing to reset."
+
+
+# YARD Stick One USB IDs (RfCat firmware + bootloader). Vendor 0x1d50.
+YS1_USB_IDS = [(0x1d50, 0x605b), (0x1d50, 0x6047),
+               (0x1d50, 0x604b), (0x1d50, 0x6048)]
+
+
+def ys1_device_present() -> bool:
+    """
+    True only if a YARD Stick One is physically plugged in right now.
+
+    We check the USB bus by vendor/product id instead of opening it, because
+    RfCat()/resetup() does NOT raise when no dongle is present -- it loops
+    forever printing "No Dongle Found", which would hang the probe. A bus scan
+    is instant and non-blocking. RFLIB_AVAILABLE only means the library
+    imported, so it stays True with the dongle unplugged.
+    """
+    if not RFLIB_AVAILABLE:
+        return False
+    try:
+        import usb.core
+        for vid, pid in YS1_USB_IDS:
+            if usb.core.find(idVendor=vid, idProduct=pid) is not None:
+                return True
+        return False
+    except Exception:
+        return False
 
 
 def transmit(payload: bytes, freq_hz: float, baud: float,

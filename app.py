@@ -37,12 +37,16 @@ class App(tk.Tk):
         self.minsize(820, 600)
 
         self.last_result: rc.CaptureResult | None = None
+        self.rtl_connected = False
+        self.ys1_connected = False
 
         self._build_freq_bar()
         self._build_capture_panel()
         self._build_payload_panel()
         self._build_transmit_panel()
         self._build_status_bar()
+
+        self.refresh_devices()   # probe real hardware on startup
 
     # ---------------- Frequency (shared by capture + transmit) ----------
     def _build_freq_bar(self):
@@ -91,9 +95,10 @@ class App(tk.Tk):
         self.cap_baud_var = tk.StringVar(value="4000")
         ttk.Entry(f, textvariable=self.cap_baud_var, width=8).grid(row=1, column=5, padx=6, pady=(0, 6), sticky="w")
 
-        hw = "RTL-SDR: ready" if rc.RTLSDR_AVAILABLE else "RTL-SDR: not found (synthetic demo mode)"
-        ttk.Label(f, text=hw, foreground=("green" if rc.RTLSDR_AVAILABLE else "#b06000")).grid(
-            row=2, column=0, columnspan=7, padx=6, pady=(0, 6), sticky="w")
+        self.rtl_status = ttk.Label(f, text="RTL-SDR: checking…", foreground="#b06000")
+        self.rtl_status.grid(row=2, column=0, columnspan=5, padx=6, pady=(0, 6), sticky="w")
+        ttk.Button(f, text="⟳ Refresh devices", command=self.refresh_devices).grid(
+            row=2, column=5, columnspan=2, padx=6, pady=(0, 6), sticky="e")
 
     # ---------------- Payload view --------------------------------------
     def _build_payload_panel(self):
@@ -155,14 +160,48 @@ class App(tk.Tk):
         self.reset_btn = ttk.Button(f, text="⟳ Reset YS1", command=self.on_reset_ys1)
         self.reset_btn.grid(row=0, column=9, padx=(0, 6), pady=6)
 
-        hw = "YARD Stick One: ready" if tx.RFLIB_AVAILABLE else "YARD Stick One: not found (dry-run mode)"
-        ttk.Label(f, text=hw, foreground=("green" if tx.RFLIB_AVAILABLE else "#b06000")).grid(
-            row=1, column=0, columnspan=9, padx=6, pady=(0, 6), sticky="w")
+        self.ys1_status = ttk.Label(f, text="YARD Stick One: checking…", foreground="#b06000")
+        self.ys1_status.grid(row=1, column=0, columnspan=10, padx=6, pady=(0, 6), sticky="w")
 
     def _build_status_bar(self):
         self.status_var = tk.StringVar(value="Ready.")
         bar = ttk.Label(self, textvariable=self.status_var, relief="sunken", anchor="w")
         bar.pack(fill="x", side="bottom")
+
+    # ---------------- Device detection ----------------------------------
+    def refresh_devices(self):
+        """Probe for ACTUAL connected hardware (not just the libraries) and
+        update the status labels. Runs off the UI thread -- opening a device
+        can block briefly."""
+        self.rtl_status.config(text="RTL-SDR: checking…", foreground="#b06000")
+        self.ys1_status.config(text="YARD Stick One: checking…", foreground="#b06000")
+
+        def work():
+            if not rc.RTLSDR_AVAILABLE:
+                rtl = (False, "RTL-SDR: library not installed (synthetic demo mode)")
+            elif rc.rtl_device_present():
+                rtl = (True, "RTL-SDR: connected")
+            else:
+                rtl = (False, "RTL-SDR: NOT connected (plug in + Zadig driver; demo mode)")
+
+            if not tx.RFLIB_AVAILABLE:
+                ys1 = (False, "YARD Stick One: library not installed (dry-run mode)")
+            elif tx.ys1_device_present():
+                ys1 = (True, "YARD Stick One: connected")
+            else:
+                ys1 = (False, "YARD Stick One: NOT connected (plug in + RfCat firmware; dry-run mode)")
+            self.after(0, lambda: self._devices_done(rtl, ys1))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _devices_done(self, rtl, ys1):
+        self.rtl_connected, rtl_txt = rtl
+        self.ys1_connected, ys1_txt = ys1
+        self.rtl_status.config(text=rtl_txt,
+                               foreground="green" if self.rtl_connected else "#b06000")
+        self.ys1_status.config(text=ys1_txt,
+                               foreground="green" if self.ys1_connected else "#b06000")
+        self.set_status("Device check complete.")
 
     # ---------------- Helpers -------------------------------------------
     def _freq_hz(self) -> float:
@@ -201,12 +240,13 @@ class App(tk.Tk):
 
         def work():
             try:
-                if rc.RTLSDR_AVAILABLE:
+                if self.rtl_connected:
                     res = rc.capture_and_demodulate(freq, sr, dur, gain,
                                                     freq_offset=offset, bandwidth=bw,
                                                     known_baud=cap_baud)
                 else:
                     res = rc.synthetic_capture(freq, sr)
+                    res.note = "SYNTHETIC (no RTL-SDR connected). " + res.note
                 self.after(0, lambda: self._capture_done(res))
             except Exception as e:
                 self.after(0, lambda: self._capture_err(e))
@@ -286,6 +326,7 @@ class App(tk.Tk):
             try:
                 msg = tx.reset_dongle()
                 self.after(0, lambda: self.set_status(msg))
+                self.after(0, self.refresh_devices)   # re-probe after reset
             except Exception as e:
                 self.after(0, lambda: messagebox.showerror("Reset failed", str(e)))
 
@@ -357,7 +398,7 @@ class App(tk.Tk):
             return
         mod = self.mod_var.get()
 
-        if tx.RFLIB_AVAILABLE and not messagebox.askyesno(
+        if self.ys1_connected and not messagebox.askyesno(
             "Confirm transmit",
             f"Transmit {len(payload)} byte(s) x{repeats}\n"
             f"on {freq/1e6:.4f} MHz ({mod}, {baud:.0f} baud)?\n\n"
@@ -366,11 +407,12 @@ class App(tk.Tk):
             return
 
         self._busy(True)
-        self.set_status("Transmitting ...")
+        self.set_status("Transmitting ..." if self.ys1_connected
+                        else "YS1 not connected — dry run.")
 
         def work():
             try:
-                fn = tx.transmit if tx.RFLIB_AVAILABLE else tx.transmit_demo
+                fn = tx.transmit if self.ys1_connected else tx.transmit_demo
                 msg = fn(payload, freq, baud, mod, repeats=repeats, deviation_hz=dev)
                 self.after(0, lambda: self._tx_done(msg))
             except Exception as e:

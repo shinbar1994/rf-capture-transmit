@@ -25,6 +25,22 @@ except Exception:  # pragma: no cover - import guard
     RTLSDR_AVAILABLE = False
 
 
+def rtl_device_present(device_index: int = 0) -> bool:
+    """
+    True only if an RTL-SDR can actually be opened right now. RTLSDR_AVAILABLE
+    only means the pyrtlsdr *library* imported -- it stays True with the dongle
+    unplugged, so the UI must call this to report real connection state.
+    """
+    if not RTLSDR_AVAILABLE:
+        return False
+    try:
+        sdr = RtlSdr(device_index=device_index)
+        sdr.close()
+        return True
+    except Exception:
+        return False
+
+
 @dataclass
 class CaptureResult:
     freq_hz: float
@@ -515,20 +531,17 @@ def demodulate_ook(iq: np.ndarray, sample_rate: float,
     result.signal_present = True
     result.max_baud = max_baud
 
-    # --- Determine the base symbol rate for the whole capture. -----------
-    if known_baud > 0:
-        _, b_hint = estimate_symbol_width(env, sample_rate, thr, min_baud,
-                                          max_baud, seed_hint=sample_rate / known_baud)
-        _, b_auto = estimate_symbol_width(env, sample_rate, thr, min_baud, max_baud)
-        seeds = {b for b in (b_hint, b_auto, known_baud) if b > 0}
-    else:
-        _, b_auto = estimate_symbol_width(env, sample_rate, thr, min_baud, max_baud)
-        if b_auto <= 0:
-            result.note = "Could not determine symbol width -- set a Known baud."
-            return result
-        seeds = {b_auto}
-    seeds |= {b / 2 for b in list(seeds) if b / 2 >= min_baud}
-    base_baud = _pick_fundamental(env, sample_rate, seeds, thr, max_baud)
+    # --- Rough base symbol rate, only to drive burst segmentation. --------
+    # Cheap: estimate_symbol_width already returns the fundamental (it has a
+    # harmonic guard). The *precise* per-burst clock is refined later inside
+    # decode_messages, so we deliberately skip the costly full-capture
+    # _pick_fundamental here -- on a 2 s capture that alone took ~6 s.
+    _, base_baud = estimate_symbol_width(env, sample_rate, thr, min_baud, max_baud)
+    if base_baud <= 0:
+        base_baud = known_baud
+    if base_baud <= 0:
+        result.note = "Could not determine symbol width -- set a Known baud."
+        return result
 
     # --- Split into separate messages on pauses (URH-style) and decode each.
     result.messages = decode_messages(env, sample_rate, thr, base_baud,
